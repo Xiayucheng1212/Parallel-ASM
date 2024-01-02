@@ -4,7 +4,7 @@
 #include <assert.h>
 #define block_size 16
 #define alphabet_size 26
-
+#define DEBUG 0
 __device__ char POSSIBLE_CHAR[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 __global__ void compute_X(int *X, int *T, int n) {
@@ -27,11 +27,11 @@ __global__ void compute_Dist(int *Dist, int *X, int *T, int *P, int n, int m) {
         else if (col == 0)
             Dist[i*(n+1)+col] = i;
         else if (T[col-1] == P[i-1])
-            Dist[i*(n+1)+col] = 1 + min(Dist[(i-1)*(n+1)+col], min(Dist[(i-1)*(n+1)+(col-1)], i+col-1));
+            Dist[i*(n+1)+col] = Dist[(i-1)*(n+1)+(col-1)];
         else if (X[(P[i-1]-int('A'))*(n+1) + col] == 0)
-            Dist[i*(n+1)+col] = 1 + min(Dist[(i-1)*(n+1)+col], Dist[(i-1)*(n+1)+(col-1)]);
-        else
-            Dist[i*(n+1)+col] = Dist[(i-1)*(n+1) + X[(P[i-1]-int('A'))*(n+1) + col]] + (col-1-X[(P[i-1]-int('A'))*(n+1) + col]);
+            Dist[i*(n+1)+col] = 1 + min(Dist[(i-1)*(n+1)+col], min(Dist[(i-1)*(n+1)+(col-1)], i+col-1));
+        else                                                                                   // D[i-1, X[l,j]-1] + (j - 1 - X[l,j])
+            Dist[i*(n+1)+col] = 1 + min(min(Dist[(i-1)*(n+1)+col], Dist[(i-1)*(n+1)+(col-1)]), Dist[(i-1)*(n+1) + X[(P[i-1]-int('A'))*(n+1) + col] - 1] + (col-1-X[(P[i-1]-int('A'))*(n+1) + col]));
         __syncthreads();
     }
 }
@@ -58,7 +58,15 @@ int main(int argc, char **argv) {
 
     fread(T, n, sizeof(int), input_T);
     fread(P, m, sizeof(int), input_P);
-
+    # if DEBUG
+    printf("n = %d, m = %d\n", n, m);
+    for (int i = 0; i < n; i++)
+        printf("%d ", T[i]);
+    printf("\n");
+    for (int i = 0; i < m; i++)
+        printf("%d ", P[i]);
+    printf("\n");
+    # endif
     fclose(input_T);
     fclose(input_P);
 
@@ -80,6 +88,20 @@ int main(int argc, char **argv) {
 
     cudaMemcpy(host_Dist, device_Dist, sizeof(int)*(n+1)*(m+1), cudaMemcpyDeviceToHost);
     cudaMemcpy(host_X, device_X, sizeof(int)*(n+1)*alphabet_size, cudaMemcpyDeviceToHost);
+
+    # if DEBUG
+    for (int i = 0; i < alphabet_size; i++) {
+        for (int j = 0; j < n+1; j++)
+            printf("%d ", host_X[i*(n+1)+j]);
+        printf("\n");
+    }
+    printf("\n");
+    for (int i = 0; i < m+1; i++) {
+        for (int j = 0; j < n+1; j++)
+            printf("%d ", host_Dist[i*(n+1)+j]);
+        printf("\n");
+    }
+    # endif
 
     output = fopen(out, "wb");
     fwrite(host_Dist, (n+1)*(m+1), sizeof(int), output);

@@ -4,6 +4,7 @@
 #include <assert.h>
 #define alphabet_size 26
 #define num_thread 16
+#define DEBUG 0
 
 /*
 Optimized from GPU to blocked version
@@ -32,11 +33,11 @@ __global__ void compute_Dist(int *Dist, int *X, int *T, int *P, int n, int m, in
     else if (col == 0)
         Dist[rd*(n+1)+col] = rd;
     else if (T[col-1] == P[rd-1])
-        Dist[rd*(n+1)+col] = 1 + min(Dist[(rd-1)*(n+1)+col], min(Dist[(rd-1)*(n+1)+(col-1)], rd+col-1));
+        Dist[rd*(n+1)+col] = Dist[rd*(n+1)+(col-1)];
     else if (X[(P[rd-1]-int('A'))*(n+1) + col] == 0)
-        Dist[rd*(n+1)+col] = 1 + min(Dist[(rd-1)*(n+1)+col], Dist[(rd-1)*(n+1)+(col-1)]);
+        Dist[rd*(n+1)+col] = 1 + min(Dist[(rd-1)*(n+1)+col], min(Dist[(rd-1)*(n+1)+(col-1)], rd + col - 1));
     else
-        Dist[rd*(n+1)+col] = Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col]] + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]);
+        Dist[rd*(n+1)+col] = 1 + min( min(Dist[(rd-1)*(n+1)+col], Dist[(rd-1)*(n+1)+(col-1)]), Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col]] + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
     __syncthreads();
 }
 
@@ -84,6 +85,14 @@ int main(int argc, char **argv) {
 
     cudaMemcpy(host_Dist, device_Dist, sizeof(int)*(n+1)*(m+1), cudaMemcpyDeviceToHost);
     cudaMemcpy(host_X, device_X, sizeof(int)*(n+1)*alphabet_size, cudaMemcpyDeviceToHost);
+
+    # if DEBUG
+    for (int i = 0; i <= m; i++) {
+        for (int j = 0; j <= n; j++)
+            printf("%d ", host_Dist[i*(n+1)+j]);
+        printf("\n");
+    }
+    # endif
 
     output = fopen(out, "wb");
     fwrite(host_Dist, (n+1)*(m+1), sizeof(int), output);
