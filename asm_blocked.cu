@@ -3,7 +3,8 @@
 #include <cuda.h>
 #include <assert.h>
 #define alphabet_size 26
-#define num_thread 16
+#define num_thread 32
+#define WARPSIZE 32
 #define DEBUG 0
 
 /*
@@ -12,6 +13,7 @@ Optimized from GPU to blocked version
 
 __device__ char POSSIBLE_CHAR[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+// TODO: Consider using openMP with vectorization to parallelize this loop.
 __global__ void compute_X(int *X, int *T, int n) {
     int row = threadIdx.x;
     for (int j = 0; j <= n; j++) {
@@ -33,11 +35,41 @@ __global__ void compute_Dist(int *Dist, int *X, int *T, int *P, int n, int m, in
     else if (col == 0)
         Dist[rd*(n+1)+col] = rd;
     else if (T[col-1] == P[rd-1])
-        Dist[rd*(n+1)+col] = Dist[rd*(n+1)+(col-1)];
+        Dist[rd*(n+1)+col] = Dist[(rd-1)*(n+1)+(col-1)];
     else if (X[(P[rd-1]-int('A'))*(n+1) + col] == 0)
         Dist[rd*(n+1)+col] = 1 + min(Dist[(rd-1)*(n+1)+col], min(Dist[(rd-1)*(n+1)+(col-1)], rd + col - 1));
     else
-        Dist[rd*(n+1)+col] = 1 + min( min(Dist[(rd-1)*(n+1)+col], Dist[(rd-1)*(n+1)+(col-1)]), Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col]] + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
+        Dist[rd*(n+1)+col] = 1 + min(min(Dist[(rd-1)*(n+1)+col], Dist[(rd-1)*(n+1)+(col-1)]), Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col] - 1] + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
+}
+
+__global__ void compute_Dist_with_shuffle(int *Dist, int *X, int *T, int *P, int n, int m, int rd) {
+    int col = blockIdx.x * num_thread + threadIdx.x;
+    if (col > n || rd == 0)
+        return;
+
+    int Dvar = Dist[(rd-1)*(n+1) + col], Avar, Bvar, Cvar;
+
+    if (col % WARPSIZE == 0) // edge between two warps, cannot use shuffle across warps
+        Avar = Dist[(rd-1)*(n+1) + col - 1];
+    else {
+        int test = __shfl_up_sync(0xffffffff, Dvar, 1);
+        // TODO: need explain why this is needed
+        if (col % WARPSIZE == 1) {
+            Avar = Dist[(rd-1)*(n+1) + col - 1];
+        }
+        else Avar = test;
+    }
+
+    Bvar = Dvar; // D[i-1][j]
+    Cvar = Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col] - 1]; // D[i-1][X[l][j]-1]
+
+    // compute D[i][j] in local memory
+    if (col == 0) Dvar = rd;
+    else if (T[col-1] == P[rd-1]) Dvar = Avar;
+    else if (X[(P[rd-1]-int('A'))*(n+1) + col] == 0) Dvar = 1 + min(Avar, min(Bvar, rd + col - 1));
+    else Dvar = 1 + min( min(Avar, Bvar), Cvar + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
+    
+    Dist[rd*(n+1)+col] = Dvar; // write back to global memory
     __syncthreads();
 }
 
@@ -80,8 +112,10 @@ int main(int argc, char **argv) {
     compute_X <<< 1, alphabet_size >>> (device_X, T, n);
 
     int nblocks = (n+1)/num_thread+1;
-    for (int i = 0; i <= m; i++)
-        compute_Dist <<< nblocks, num_thread >>> (device_Dist, device_X, T, P, n, m, i);
+    for (int i = 0; i <= m; i++){
+        compute_Dist_with_shuffle <<< nblocks, num_thread >>> (device_Dist, device_X, T, P, n, m, i);
+        cudaDeviceSynchronize();
+    }
 
     cudaMemcpy(host_Dist, device_Dist, sizeof(int)*(n+1)*(m+1), cudaMemcpyDeviceToHost);
     cudaMemcpy(host_X, device_X, sizeof(int)*(n+1)*alphabet_size, cudaMemcpyDeviceToHost);
