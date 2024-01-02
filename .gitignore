@@ -1,1 +1,5 @@
-./testcase/*
+testcase/
+asm_cpu_seq
+asm_cpu_omp
+asm_gpu
+asm_blocked

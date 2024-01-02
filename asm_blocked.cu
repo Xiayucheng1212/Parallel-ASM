@@ -70,7 +70,6 @@ __global__ void compute_Dist_with_shuffle(int *Dist, int *X, int *T, int *P, int
     else Dvar = 1 + min( min(Avar, Bvar), Cvar + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
     
     Dist[rd*(n+1)+col] = Dvar; // write back to global memory
-    __syncthreads();
 }
 
 int main(int argc, char **argv) {
