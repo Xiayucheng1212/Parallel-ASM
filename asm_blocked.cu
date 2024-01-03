@@ -29,8 +29,8 @@ __global__ void compute_X(int *X, int *T, int n) {
 
 __global__ void compute_Dist(int *Dist, int *X, int *T, int *P, int n, int m, int rd) {
     int num_tile = 1;
-    if (num_thread * num_block < n)
-        num_tile = n / (num_block*num_thread) + 1;
+    if (num_thread * num_block < (n+1))
+        num_tile = (n+1) / (num_block*num_thread) + 1;
     int s_col = blockIdx.x * num_thread * num_tile + threadIdx.x, e_col = s_col + num_tile;
     for (int col = s_col; col < e_col; col++) {
         if (col > n)
@@ -52,10 +52,11 @@ __global__ void compute_Dist_with_shuffle(int *Dist, int *X, int *T, int *P, int
     // int col = blockIdx.x * num_thread + threadIdx.x;
     // tile up
     int num_tile = 1;
-    if (num_thread * num_block < n)
+    if (num_thread * num_block < (n+1))
         num_tile = (n+1) / (num_block*num_thread) + 1;
-    int s_col = blockIdx.x * num_thread * num_tile + threadIdx.x * num_tile, e_col = s_col + num_tile;
-    for (int col = s_col; col < e_col; col++) {
+    int s_col = blockIdx.x * num_thread + threadIdx.x;
+    for (int i = 0; i < num_tile; i++) {
+        int col = s_col + num_block*num_thread*i;
         if (col > n || rd == 0)
             return;
 
