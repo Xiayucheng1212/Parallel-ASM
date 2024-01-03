@@ -3,7 +3,7 @@
 #include <cuda.h>
 #include <assert.h>
 #define alphabet_size 26
-#define num_block 256
+#define num_block 128
 #define num_thread 64
 #define WARPSIZE 32
 #define DEBUG 0
