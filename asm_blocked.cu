@@ -3,7 +3,8 @@
 #include <cuda.h>
 #include <assert.h>
 #define alphabet_size 26
-#define num_thread 32
+#define num_block 256
+#define num_thread 64
 #define WARPSIZE 32
 #define DEBUG 0
 
@@ -27,49 +28,61 @@ __global__ void compute_X(int *X, int *T, int n) {
 }
 
 __global__ void compute_Dist(int *Dist, int *X, int *T, int *P, int n, int m, int rd) {
-    int col = blockIdx.x * num_thread + threadIdx.x;
-    if (col > n)
-        return;
-    if (rd == 0) 
-        Dist[rd*(n+1)+col] = 0;
-    else if (col == 0)
-        Dist[rd*(n+1)+col] = rd;
-    else if (T[col-1] == P[rd-1])
-        Dist[rd*(n+1)+col] = Dist[(rd-1)*(n+1)+(col-1)];
-    else if (X[(P[rd-1]-int('A'))*(n+1) + col] == 0)
-        Dist[rd*(n+1)+col] = 1 + min(Dist[(rd-1)*(n+1)+col], min(Dist[(rd-1)*(n+1)+(col-1)], rd + col - 1));
-    else
-        Dist[rd*(n+1)+col] = 1 + min(min(Dist[(rd-1)*(n+1)+col], Dist[(rd-1)*(n+1)+(col-1)]), Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col] - 1] + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
+    int num_tile = 1;
+    if (num_thread * num_block < n)
+        num_tile = n / (num_block*num_thread) + 1;
+    int s_col = blockIdx.x * num_thread * num_tile + threadIdx.x, e_col = s_col + num_tile;
+    for (int col = s_col; col < e_col; col++) {
+        if (col > n)
+            return;
+        if (rd == 0) 
+            Dist[rd*(n+1)+col] = 0;
+        else if (col == 0)
+            Dist[rd*(n+1)+col] = rd;
+        else if (T[col-1] == P[rd-1])
+            Dist[rd*(n+1)+col] = Dist[(rd-1)*(n+1)+(col-1)];
+        else if (X[(P[rd-1]-int('A'))*(n+1) + col] == 0)
+            Dist[rd*(n+1)+col] = 1 + min(Dist[(rd-1)*(n+1)+col], min(Dist[(rd-1)*(n+1)+(col-1)], rd + col - 1));
+        else
+            Dist[rd*(n+1)+col] = 1 + min(min(Dist[(rd-1)*(n+1)+col], Dist[(rd-1)*(n+1)+(col-1)]), Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col] - 1] + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
+    }
 }
 
 __global__ void compute_Dist_with_shuffle(int *Dist, int *X, int *T, int *P, int n, int m, int rd) {
-    int col = blockIdx.x * num_thread + threadIdx.x;    
-    if (col > n || rd == 0)
-        return;
+    // int col = blockIdx.x * num_thread + threadIdx.x;
+    // tile up
+    int num_tile = 1;
+    if (num_thread * num_block < n)
+        num_tile = (n+1) / (num_block*num_thread) + 1;
+    int s_col = blockIdx.x * num_thread * num_tile + threadIdx.x * num_tile, e_col = s_col + num_tile;
+    for (int col = s_col; col < e_col; col++) {
+        if (col > n || rd == 0)
+            return;
 
-    int Dvar = Dist[(rd-1)*(n+1) + col], Avar, Bvar, Cvar;
+        int Dvar = Dist[(rd-1)*(n+1) + col], Avar, Bvar, Cvar;
 
-    if (col % WARPSIZE == 0) // edge between two warps, cannot use shuffle across warps
-        Avar = Dist[(rd-1)*(n+1) + col - 1];
-    else {
-        int test = __shfl_up_sync(0xffffffff, Dvar, 1);
-        // TODO: need explain why this is needed
-        if (col % WARPSIZE == 1) {
+        if (col % WARPSIZE == 0) // edge between two warps, cannot use shuffle across warps
             Avar = Dist[(rd-1)*(n+1) + col - 1];
+        else {
+            int test = __shfl_up_sync(0xffffffff, Dvar, 1);
+            // TODO: need explain why this is needed
+            if (col % WARPSIZE == 1) {
+                Avar = Dist[(rd-1)*(n+1) + col - 1];
+            }
+            else Avar = test;
         }
-        else Avar = test;
+
+        Bvar = Dvar; // D[i-1][j]
+        Cvar = Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col] - 1]; // D[i-1][X[l][j]-1]
+
+        // compute D[i][j] in local memory
+        if (col == 0) Dvar = rd;
+        else if (T[col-1] == P[rd-1]) Dvar = Avar;
+        else if (X[(P[rd-1]-int('A'))*(n+1) + col] == 0) Dvar = 1 + min(Avar, min(Bvar, rd + col - 1));
+        else Dvar = 1 + min( min(Avar, Bvar), Cvar + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
+        
+        Dist[rd*(n+1)+col] = Dvar; // write back to global memory
     }
-
-    Bvar = Dvar; // D[i-1][j]
-    Cvar = Dist[(rd-1)*(n+1) + X[(P[rd-1]-int('A'))*(n+1) + col] - 1]; // D[i-1][X[l][j]-1]
-
-    // compute D[i][j] in local memory
-    if (col == 0) Dvar = rd;
-    else if (T[col-1] == P[rd-1]) Dvar = Avar;
-    else if (X[(P[rd-1]-int('A'))*(n+1) + col] == 0) Dvar = 1 + min(Avar, min(Bvar, rd + col - 1));
-    else Dvar = 1 + min( min(Avar, Bvar), Cvar + (col-1-X[(P[rd-1]-int('A'))*(n+1) + col]));
-    
-    Dist[rd*(n+1)+col] = Dvar; // write back to global memory
 }
 
 int main(int argc, char **argv) {
@@ -115,7 +128,7 @@ int main(int argc, char **argv) {
 
     compute_X <<< 1, alphabet_size >>> (device_X, device_T, n);
 
-    int nblocks = (n+1)/num_thread+1;
+    int nblocks = min((n+1)/num_thread+1, num_block);
     for (int i = 0; i <= m; i++){
         compute_Dist_with_shuffle <<< nblocks, num_thread >>> (device_Dist, device_X, device_T, device_P, n, m, i);
         cudaDeviceSynchronize();
