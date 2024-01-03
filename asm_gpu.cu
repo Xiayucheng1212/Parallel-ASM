@@ -46,15 +46,15 @@ int main(int argc, char **argv) {
     input_P = fopen(in_P, "rb");
 
     int n, m;
-    int *T, *P;
+    int *T, *P, *device_T, *device_P;
 
     fread(&n, 1, sizeof(int), input_T);
     fread(&m, 1, sizeof(int), input_P);
 
-    // T = (int*)malloc(sizeof(int)*n);
-    // P = (int*)malloc(sizeof(int)*m);
-    cudaMallocHost(&T, sizeof(int)*n);
-    cudaMallocHost(&P, sizeof(int)*m);
+    T = (int*)malloc(sizeof(int)*n);
+    P = (int*)malloc(sizeof(int)*m);
+    // cudaMallocHost(&T, sizeof(int)*n);
+    // cudaMallocHost(&P, sizeof(int)*m);
 
     fread(T, n, sizeof(int), input_T);
     fread(P, m, sizeof(int), input_P);
@@ -72,19 +72,24 @@ int main(int argc, char **argv) {
 
     int *host_Dist, *device_Dist, *host_X, *device_X;
 
-    cudaMallocHost(&host_X, sizeof(int)*(n+1)*alphabet_size);
-    cudaMallocHost(&host_Dist, sizeof(int)*(n+1)*(m+1));
-    // host_Dist = (int*)malloc(sizeof(int)*(n+1)*(m+1));
+    // cudaMallocHost(&host_X, sizeof(int)*(n+1)*alphabet_size);
+    // cudaMallocHost(&host_Dist, sizeof(int)*(n+1)*(m+1));
+    host_X = (int*)malloc(sizeof(int)*(n+1)*alphabet_size);
+    host_Dist = (int*)malloc(sizeof(int)*(n+1)*(m+1));
 
     cudaMalloc((void**)&device_Dist, sizeof(int)*(n+1)*(m+1));
     cudaMalloc((void**)&device_X, sizeof(int)*(n+1)*alphabet_size);
+    cudaMalloc((void**)&device_T, sizeof(int)*n);
+    cudaMalloc((void**)&device_P, sizeof(int)*m);
+    cudaMemcpy(device_T, T, sizeof(int)*n, cudaMemcpyHostToDevice);
+    cudaMemcpy(device_P, P, sizeof(int)*m, cudaMemcpyHostToDevice);
     // cudaMemcpy(device_Dist, host_Dist, sizeof(int)*n*m, cudaMemcpyHostToDevice);
 
     // dim3 compute_X_nblocks((n+1)/block_size+1, m/block_size+1);
     // dim3 compute_X_nthreads(block_size, block_size);
 
-    compute_X <<< 1, alphabet_size >>> (device_X, T, n);
-    compute_Dist <<< 1, n+1 >>> (device_Dist, device_X, T, P, n, m);
+    compute_X <<< 1, alphabet_size >>> (device_X, device_T, n);
+    compute_Dist <<< 1, n+1 >>> (device_Dist, device_X, device_T, device_P, n, m);
 
     cudaMemcpy(host_Dist, device_Dist, sizeof(int)*(n+1)*(m+1), cudaMemcpyDeviceToHost);
     cudaMemcpy(host_X, device_X, sizeof(int)*(n+1)*alphabet_size, cudaMemcpyDeviceToHost);
